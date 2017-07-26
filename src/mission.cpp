@@ -16,6 +16,19 @@ class MissionController {
         MissionController();
         void Iterate();
         typedef enum { ESTOP, STRAIGHT, STOP } State;
+
+        std::string StateString(State state) {
+            switch(state) {
+                case ESTOP:
+                    return "estop";
+                case STRAIGHT:
+                    return "straight";
+                case STOP:
+                    return "stop";
+                default:
+                    return "unknown";
+            }
+        }
     private:
         void disarm();
         void arm();
@@ -32,7 +45,7 @@ class MissionController {
 
         ros::Subscriber kill_sub_;
 
-        State state_;
+        bool estop_;
         bool armed_;
         ros::NodeHandle nh_;
         static const State *mission_;
@@ -44,31 +57,43 @@ class MissionController {
 
 static const MissionController::State mission[] = { MissionController::STRAIGHT, MissionController::STOP };
 const MissionController::State *MissionController::mission_ = mission;
-static const float durations[] = { 60.0, -1};
+static const float durations[] = { 5.0, -1};
 const float *MissionController::durations_ = durations;
 
-MissionController::MissionController(): armed_(false), state_(ESTOP), index_(0), last_time_(0) {
+MissionController::MissionController(): armed_(false), estop_(true), index_(0), last_time_(0) {
     kill_sub_ =
-        nh.subscribe("/vehicle/kill_switch", 1, &MissionController::killCallback, this);
+        nh.subscribe("/kill_switch", 1, &MissionController::killCallback, this);
 
     angular_pub_ =
       nh.advertise<geometry_msgs::Vector3>("/vehicle/angular/setpoint", 1);
     linear_pub_ =
         nh.advertise<geometry_msgs::Vector3>("/vehicle/linear/setpoint", 1);
-    arming_pub_ =
-        nh.advertise<std_msgs::Bool>("/vehicle/arming", 1);
+    arming_pub_ = nh.advertise<std_msgs::Bool>("/vehicle/arming", 2);
+    if (!arming_pub_) {
+        ROS_ERROR("Failed to advertise to /vehicle/arming");
+    }
+
+    ros::Rate rate(20);
+    while(arming_pub_.getNumSubscribers() == 0) {
+        ros::spinOnce();
+        rate.sleep();
+    }
 }
 
 void MissionController::arm() {
+    ROS_INFO("Arming");
     std_msgs::Bool msg;
     msg.data = true;
     arming_pub_.publish(msg);
+    armed_ = true;
 }
 
 void MissionController::disarm() {
+    ROS_INFO("Disarming");
     std_msgs::Bool msg;
     msg.data = false;
     arming_pub_.publish(msg);
+    armed_ = false;
 }
 
 void MissionController::SetAngular(float roll, float pitch, float yaw) {
@@ -90,19 +115,22 @@ void MissionController::SetLinear(float xdot, float ydot, float zdot) {
 
 void MissionController::killCallback(const std_msgs::Bool::ConstPtr &kill) {
     if(kill->data) {
-        state_ = ESTOP;
+        ROS_INFO("Disabling");
+        estop_ = true;
         disarm();
     } else {
-        state_ = mission_[index_];
-        if (!armed_) {
-            arm();
-        }
+        ROS_INFO("Enabling");
+        estop_ = false;
+        arm();
     }
     last_time_ = ros::Time::now();
 }
 
 void MissionController::Iterate() {
-    switch(state_) {
+    if(estop_) {
+        return;
+    }
+    switch(mission_[index_]) {
         case STRAIGHT:
             SetAngular(0.0,0.0,0.0);
             SetLinear(0.10,0.0,0.0);
@@ -111,20 +139,17 @@ void MissionController::Iterate() {
             SetAngular(0.0,0.0,0.0);
             SetLinear(0.0,0.0,0.0);
             break;
-        case ESTOP:
-            break;
         default:
             break;
     }
-    if(state_ != ESTOP) {
-        if(last_time_ == ros::Time(0)) {
-            state_passed_ += ros::Time::now() - last_time_;
-        }
-        last_time_ = ros::Time::now();
+    if(last_time_ != ros::Time(0)) {
+        state_passed_ += ros::Time::now() - last_time_;
     }
+    last_time_ = ros::Time::now();
     if (durations_[index_] >= 0.0 && state_passed_ > ros::Duration(durations_[index_])) {
         index_++;
         state_passed_ = ros::Duration(0);
+        ROS_INFO("New state: %s", StateString(mission_[index_]).c_str());
     }
 }
 
@@ -132,12 +157,12 @@ int main(int argc, char** argv) {
   ros::init(argc, argv, "mission");
 
   ros::NodeHandle nh;
-  MissionController control;
+  ros::Rate r(10);
 
-  ros::Rate r(5);
+  MissionController control;
   while(ros::ok()) {
-      control.Iterate();
       ros::spinOnce();
+      control.Iterate();
       r.sleep();
   }
   ros::shutdown();

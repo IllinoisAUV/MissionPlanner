@@ -134,6 +134,7 @@ catkin_package(
 ## The recommended prefix ensures that target names across packages don't collide
 # add_executable(${PROJECT_NAME}_node src/mission_node.cpp)
 add_executable(mission src/mission.cpp)
+include_directories(mission include ${catkin_INCLUDE_DIRS})
 add_dependencies(mission ${catkin_EXPORTED_TARGETS})
 target_link_libraries(mission ${catkin_LIBRARIES})
 
