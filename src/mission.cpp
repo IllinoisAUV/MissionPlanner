@@ -7,6 +7,9 @@
 
 #include <ros/ros.h>
 #include <ros/console.h>
+#include <image_transport/image_transport.h>
+#include <cv_bridge/cv_bridge.h>
+#include <sensor_msgs/image_encodings.h>
 #include <geometry_msgs/Vector3.h>
 #include <mavros_msgs/StreamRate.h>
 #include <std_msgs/Bool.h>
@@ -19,9 +22,9 @@
 
 #include "vision.h"
 
-const float speed = 0.2;
-const float kP_yaw = 0.0002;
-const float kP_height = 0.0003;
+const float speed = 0.1;
+const float kP_yaw = 0.00000002;
+const float kP_height = 0.0000001;
 
 class MissionController {
     public:
@@ -63,11 +66,11 @@ class MissionController {
 
         void nextState();
         void killCallback(const std_msgs::Bool::ConstPtr &kill);
-
-        void visionDoneCallback(const std_msgs::Empty::ConstPtr &done);
-        void visionTargetCallback(const std_msgs::Float32MultiArray::ConstPtr &target);
+        void imageCallback(const sensor_msgs::ImageConstPtr& msg);
 
         ros::NodeHandle nh;
+        image_transport::ImageTransport it;
+        image_transport::Subscriber imageSub;
 
         ros::Publisher angular_pub_;
         ros::Publisher linear_pub_;
@@ -90,12 +93,12 @@ class MissionController {
 
 /* static const MissionController::State mission[] = { MissionController::VISION }; */
 /* static const float durations[] = { -1 }; */
-static const MissionController::State mission[] = { MissionController::FORWARD };
+static const MissionController::State mission[] = { MissionController::VISION };
 static const float durations[] = { -1 };
 const MissionController::State *MissionController::mission_ = mission;
 const float *MissionController::durations_ = durations;
 
-MissionController::MissionController(): armed_(false), estop_(true), index_(0), last_time_(0) {
+MissionController::MissionController(): it(nh), armed_(false), estop_(true), index_(0), last_time_(0) {
     kill_sub_ =
         nh.subscribe("/kill_switch", 1, &MissionController::killCallback, this);
 
@@ -105,13 +108,25 @@ MissionController::MissionController(): armed_(false), estop_(true), index_(0), 
         nh.advertise<geometry_msgs::Vector3>("/vehicle/linear/setpoint", 1);
     arming_pub_ = nh.advertise<std_msgs::Bool>("/vehicle/arming", 2);
 
-    ros::Rate rate(20);
+    imageSub = it.subscribe("/camera_right", 1, &MissionController::imageCallback, this);
+
+    ros::Rate rate(10);
     while(arming_pub_.getNumSubscribers() == 0) {
         ros::spinOnce();
         rate.sleep();
     }
 }
 
+void MissionController::imageCallback(const sensor_msgs::ImageConstPtr& msg) {
+    cv_bridge::CvImagePtr cv_ptr;
+    try {
+        cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
+    } catch (cv_bridge::Exception& e) {
+        ROS_ERROR("cv_bridge exception: %s", e.what());
+        return;
+    }
+    vision_.src = cv_ptr->image;
+}
 void MissionController::arm() {
     ROS_INFO("Arming");
     std_msgs::Bool msg;
@@ -159,17 +174,6 @@ void MissionController::killCallback(const std_msgs::Bool::ConstPtr &kill) {
     }
     last_time_ = ros::Time::now();
 }
-void MissionController::visionDoneCallback(const std_msgs::Empty::ConstPtr &done) {
-    nextState();
-}
-void MissionController::visionTargetCallback(const std_msgs::Float32MultiArray::ConstPtr &target) {
-    if(target->data.size() != 2) {
-        return;
-    }
-
-    target_angle_ = target->data[0];
-    target_radius_ = target->data[1];
-}
 
 void MissionController::nextState() {
     index_++;
@@ -178,25 +182,30 @@ void MissionController::nextState() {
 }
 
 void MissionController::Iterate() {
-    if(estop_) {
-        return;
-    }
     switch(mission_[index_]) {
         case FORWARD:
-            SetAngular(0.0,0.0,0.0);
-            SetLinear(0.20,0.0,0.0);
+            if (!estop_) {
+                SetAngular(0.0,0.0,0.0);
+                SetLinear(0.20,0.0,0.0);
+            }
             break;
         case STOP:
-            SetAngular(0.0,0.0,0.0);
-            SetLinear(0.0,0.0,0.0);
+            if (!estop_) {
+                SetAngular(0.0,0.0,0.0);
+                SetLinear(0.0,0.0,0.0);
+            }
             break;
         case UP:
-            SetAngular(0.0,0.0,0.0);
-            SetLinear(0.0,0.0,0.1);
+            if (!estop_) {
+                SetAngular(0.0,0.0,0.0);
+                SetLinear(0.0,0.0,0.1);
+            }
             break;
         case DOWN:
-            SetAngular(0.0,0.0,0.0);
-            SetLinear(0.0,0.0,-0.1);
+            if (!estop_) {
+                SetAngular(0.0,0.0,0.0);
+                SetLinear(0.0,0.0,-0.1);
+            }
             break;
         case BUOY:
             // fallthrough
@@ -205,6 +214,7 @@ void MissionController::Iterate() {
         case WIRE:
             // fallthrough
         case VISION:
+        default:
             {
                 targets_data targets = vision_.findTargets();
                 float angle = -1;
@@ -214,30 +224,36 @@ void MissionController::Iterate() {
                     angle = targets.vgate_angle;
                     radius = targets.vgate_radius;
                     area = targets.vgate_area;
+                    ROS_INFO("Found gate at %f, %f", angle, radius);
                 } else if (targets.buoy_angle != -1) {
                     angle = targets.buoy_angle;
                     radius = targets.buoy_radius;
                     area = targets.buoy_area;
+                    ROS_INFO("Found buoy at %f, %f", angle, radius);
                 } else if (targets.wire_angle != -1) {
                     angle = targets.wire_angle;
                     radius = targets.wire_radius;
                     area = targets.wire_area;
+                    ROS_INFO("Found wire at %f, %f", angle, radius);
                 }
                 if (angle == -1) {
-                    SetAngular(0.0,0.0,0.0);
-                    SetLinear(speed,0.0,0.0);
+                    if(!estop_) {
+                        SetAngular(0.0,0.0,0.0);
+                        SetLinear(speed,0.0,0.0);
+                    }
                     break;
                 }
+
                 // Basic P feedback control
                 float y_diff = radius * cos(angle);
                 float z_diff = radius * sin(angle);
                 float yaw = kP_yaw * area * y_diff;
                 float zdot = kP_height * area * z_diff;
-                SetAngular(0.0,0.0,yaw);
-                SetLinear(speed,0.0,zdot);
+                if(!estop_) {
+                    SetAngular(0.0,0.0,yaw);
+                    SetLinear(speed,0.0,zdot);
+                }
             }
-            break;
-        default:
             break;
     }
     if(last_time_ != ros::Time(0)) {
@@ -253,16 +269,14 @@ int main(int argc, char** argv) {
   ros::init(argc, argv, "mission");
 
   ros::NodeHandle nh;
-  ros::Rate r(20);
+  ros::Rate r(10);
 
   MissionController control;
   int i = 0;
   while(ros::ok()) {
       ros::spinOnce();
-      /* control.vision_.getImage(); */
-      if(i % 2 == 0) {
-          control.Iterate();
-      }
+      control.vision_.getImage();
+      control.Iterate();
       r.sleep();
       i++;
   }

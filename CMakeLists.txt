@@ -13,6 +13,8 @@ find_package(catkin REQUIRED COMPONENTS
   std_msgs
   mavros_msgs
   geometry_msgs
+  cv_bridge
+  image_transport
 )
 
 find_package ( OpenCV REQUIRED )
@@ -108,7 +110,7 @@ find_package ( OpenCV REQUIRED )
 catkin_package(
 INCLUDE_DIRS include
 #  LIBRARIES mission
-# CATKIN_DEPENDS message_runtime
+# CATKIN_DEPENDS
 #  DEPENDS system_lib
 )
 
