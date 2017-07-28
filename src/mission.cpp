@@ -17,22 +17,17 @@
 #include <sstream>
 #include <vector>
 
+#include "vision.h"
+
 const float speed = 0.2;
 const float kP_yaw = 0.0002;
 const float kP_height = 0.0003;
-
-struct VisionTarget {
-    enum class Target { NONE=-1, GATE=0, BUOY=1 };
-    Target target;
-    float angle;
-    float radius;
-}
 
 class MissionController {
     public:
         MissionController();
         void Iterate();
-        typedef enum { ESTOP, FORWARD, STOP, UP, DOWN, VISION } State;
+        typedef enum { ESTOP, FORWARD, STOP, UP, DOWN, GATE, BUOY, WIRE, VISION } State;
 
         std::string StateString(State state) {
             switch(state) {
@@ -46,12 +41,20 @@ class MissionController {
                     return "up";
                 case DOWN:
                     return "down";
+                case GATE:
+                    return "gate";
+                case BUOY:
+                    return "buoy";
+                case WIRE:
+                    return "wire";
                 case VISION:
                     return "vision";
                 default:
                     return "unknown";
             }
         }
+
+        Vision vision_;
     private:
         void disarm();
         void arm();
@@ -70,10 +73,6 @@ class MissionController {
         ros::Publisher linear_pub_;
         ros::Publisher arming_pub_;
 
-        ros::Publisher vision_cmd_pub_;
-        ros::Subscriber vision_done_sub;
-        ros::Subscriber vision_target_sub;
-
         ros::Subscriber kill_sub_;
 
         bool estop_;
@@ -89,9 +88,11 @@ class MissionController {
         float target_angle_;
 };
 
-static const MissionController::State mission[] = { MissionController::FORWARD, MissionController::BUOY }; // { MissionController::DOWN, MissionController::FORWARD, MissionController::FORWARD };
+/* static const MissionController::State mission[] = { MissionController::VISION }; */
+/* static const float durations[] = { -1 }; */
+static const MissionController::State mission[] = { MissionController::FORWARD };
+static const float durations[] = { -1 };
 const MissionController::State *MissionController::mission_ = mission;
-static const float durations[] = { 2.0,  -1 }; // { 6.0, 50.0, -1 };
 const float *MissionController::durations_ = durations;
 
 MissionController::MissionController(): armed_(false), estop_(true), index_(0), last_time_(0) {
@@ -103,10 +104,6 @@ MissionController::MissionController(): armed_(false), estop_(true), index_(0), 
     linear_pub_ =
         nh.advertise<geometry_msgs::Vector3>("/vehicle/linear/setpoint", 1);
     arming_pub_ = nh.advertise<std_msgs::Bool>("/vehicle/arming", 2);
-
-    vision_cmd_pub_ = nh.advertise<std_msgs::String>("/vision/start", 1);
-    vision_done_sub = nh.subscribe("/vision/done", 1, &MissionController::visionDoneCallback, this);
-    vision_target_sub = nh.subscribe("/vision/target", 1, &MissionController::visionTargetCallback, this);
 
     ros::Rate rate(20);
     while(arming_pub_.getNumSubscribers() == 0) {
@@ -177,20 +174,6 @@ void MissionController::visionTargetCallback(const std_msgs::Float32MultiArray::
 void MissionController::nextState() {
     index_++;
     state_passed_ = ros::Duration(0);
-    switch (mission_[index_]) {
-        case BUOY: {
-                       std_msgs::String msg;
-                       msg.data = "buoy";
-                       vision_cmd_pub_.publish(msg);
-                   }
-                   break;
-        case GATE: {
-                       std_msgs::String msg;
-                       msg.data = "gate";
-                       vision_cmd_pub_.publish(msg);
-                   }
-                   break;
-    }
     ROS_INFO("New state: %s", StateString(mission_[index_]).c_str());
 }
 
@@ -215,23 +198,44 @@ void MissionController::Iterate() {
             SetAngular(0.0,0.0,0.0);
             SetLinear(0.0,0.0,-0.1);
             break;
-        case VISION: {
-                         // TODO: Integrate code
-                         vector<VisionTarget> targets = doVision();
-                         VisionTarget::Target target = -1;
-                         for(int i=0; i < targets.size(); i++) {
-                             if(targets[i] != VisionTarget::Target::NONE && (int)targets[i] < target) {
-                                 target = targets[i];
-                             }
-                         }
-                         // Basic P feedback control
-                         float y_diff = target.radius * cos(target.angle);
-                         float z_diff = target.radius * sin(target.angle);
-                         float yaw = kP_yaw * y_diff;
-                         float zdot = kP_height * z_diff;
-                         SetAngular(0.0,0.0,yaw);
-                         SetLinear(speed,0.0, zdot);
-                     }
+        case BUOY:
+            // fallthrough
+        case GATE:
+            // fallthrough
+        case WIRE:
+            // fallthrough
+        case VISION:
+            {
+                targets_data targets = vision_.findTargets();
+                float angle = -1;
+                float radius = -1;
+                float area = -1;
+                if (targets.vgate_angle != -1) {
+                    angle = targets.vgate_angle;
+                    radius = targets.vgate_radius;
+                    area = targets.vgate_area;
+                } else if (targets.buoy_angle != -1) {
+                    angle = targets.buoy_angle;
+                    radius = targets.buoy_radius;
+                    area = targets.buoy_area;
+                } else if (targets.wire_angle != -1) {
+                    angle = targets.wire_angle;
+                    radius = targets.wire_radius;
+                    area = targets.wire_area;
+                }
+                if (angle == -1) {
+                    SetAngular(0.0,0.0,0.0);
+                    SetLinear(speed,0.0,0.0);
+                    break;
+                }
+                // Basic P feedback control
+                float y_diff = radius * cos(angle);
+                float z_diff = radius * sin(angle);
+                float yaw = kP_yaw * area * y_diff;
+                float zdot = kP_height * area * z_diff;
+                SetAngular(0.0,0.0,yaw);
+                SetLinear(speed,0.0,zdot);
+            }
             break;
         default:
             break;
@@ -249,13 +253,18 @@ int main(int argc, char** argv) {
   ros::init(argc, argv, "mission");
 
   ros::NodeHandle nh;
-  ros::Rate r(10);
+  ros::Rate r(20);
 
   MissionController control;
+  int i = 0;
   while(ros::ok()) {
       ros::spinOnce();
-      control.Iterate();
+      /* control.vision_.getImage(); */
+      if(i % 2 == 0) {
+          control.Iterate();
+      }
       r.sleep();
+      i++;
   }
   ros::shutdown();
   return 0;
