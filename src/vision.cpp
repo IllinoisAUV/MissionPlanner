@@ -1,6 +1,16 @@
 #include "vision.h"
 #include <sstream>
 
+//yellow:
+//    inRange(src_hsv, Scalar(22,100,100), Scalar(38,255,255), lower_bound_image);
+//    inRange(src_hsv, Scalar(22,100,100), Scalar(38,255,255), upper_bound_image);
+
+//red/orange:
+//    inRange(src_hsv, Scalar(0,0,179), Scalar(255,76,255), lower_bound_image);
+//    inRange(src_hsv, Scalar(upper_bound1,100,100), Scalar(upper_bound2,255,255), upper_bound_image);
+
+
+
 Vision::Vision() {
     done_vgate = false;
     done_buoy = false;
