@@ -22,8 +22,9 @@
 
 #include "vision.h"
 
-const float speed = 0.1;
-const float kP_yaw = 0.00000002;
+#define FILTER_LEN 3
+const float speed = 0.10;
+const float kP_yaw = 0.00003;
 const float kP_height = 0.0000001;
 
 class MissionController {
@@ -89,6 +90,9 @@ class MissionController {
 
         float target_radius_;
         float target_angle_;
+        vector<float> angles_;
+        vector<float> radii_;
+        vector<float> areas_;
 };
 
 /* static const MissionController::State mission[] = { MissionController::VISION }; */
@@ -98,7 +102,8 @@ static const float durations[] = { -1 };
 const MissionController::State *MissionController::mission_ = mission;
 const float *MissionController::durations_ = durations;
 
-MissionController::MissionController(): it(nh), armed_(false), estop_(true), index_(0), last_time_(0) {
+MissionController::MissionController(): it(nh), armed_(false), estop_(true), index_(0), last_time_(0),
+    angles_(FILTER_LEN), radii_(FILTER_LEN), areas_(FILTER_LEN) {
     kill_sub_ =
         nh.subscribe("/kill_switch", 1, &MissionController::killCallback, this);
 
@@ -244,11 +249,30 @@ void MissionController::Iterate() {
                     break;
                 }
 
+                /* angles_.insert(angles_.begin(), angle); */
+                /* radii_.insert(radii_.begin(), radius); */
+                /* areas_.insert(areas_.begin(), area); */
+
+                /* angles_.pop_back(); */
+                /* radii_.pop_back(); */
+                /* areas_.pop_back(); */
+
+                /* for(int i=0; i < FILTER_LEN; i++) { */
+                /*     angle += angles_[i]; */
+                /*     radius += radii_[i]; */
+                /*     area += areas_[i]; */
+                /* } */
+
+                /* angle /= FILTER_LEN; */
+                /* radius /= FILTER_LEN; */
+                /* area /= FILTER_LEN; */
+
+
                 // Basic P feedback control
                 float y_diff = radius * cos(angle);
                 float z_diff = radius * sin(angle);
-                float yaw = kP_yaw * area * y_diff;
-                float zdot = kP_height * area * z_diff;
+                float yaw = kP_yaw * y_diff;
+                float zdot = kP_height * z_diff;
                 if(!estop_) {
                     SetAngular(0.0,0.0,yaw);
                     SetLinear(speed,0.0,zdot);

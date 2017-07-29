@@ -70,16 +70,16 @@ vector<double> Vision::detect_buoy(Mat src){
     string colorToDetect;
     Mat lower_bound_image, upper_bound_image;
     /* // Yellow buoy */
-    /* lower_bound1 = 22; */
-    /* lower_bound2 = 38; */
-    /* upper_bound1 = 22; */
-    /* upper_bound2 = 38; */
+    lower_bound1 = 22;
+    lower_bound2 = 38;
+    upper_bound1 = 22;
+    upper_bound2 = 38;
 
     // Red buoy
-    lower_bound1 = 0;
-    lower_bound2 = 75;
-    upper_bound1 = 130;
-    upper_bound2 = 179;
+    /* lower_bound1 = 0; */
+    /* lower_bound2 = 132; */
+    /* upper_bound1 = 0; */
+    /* upper_bound2 = 132; */
 
     //filtering for color
     inRange(src_hsv, Scalar(lower_bound1,100,100), Scalar(lower_bound2,255,255), lower_bound_image);
