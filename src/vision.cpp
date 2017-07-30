@@ -10,6 +10,8 @@
 //    inRange(src_hsv, Scalar(upper_bound1,100,100), Scalar(upper_bound2,255,255), upper_bound_image);
 
 
+#define IMAGE_DEST ("/home/ubuntu/catkin_ws/image/")
+#define WRITE_IMAGES (true)
 
 Vision::Vision() {
     done_vgate = false;
@@ -25,6 +27,7 @@ Vision::Vision() {
         throw "Cannot open video file";
     }
     cap_.set(CV_CAP_PROP_BUFFERSIZE, 1);
+    cap_.set(CV_CAP_PROP_FPS, 5);
 }
 
 targets_data Vision::findTargets(){
@@ -33,6 +36,10 @@ targets_data Vision::findTargets(){
     ret.buoy_angle = r[0];
     ret.buoy_radius = r[1];
     ret.buoy_area = r[2];
+    /* ret.buoy_angle = -1; */
+    /* ret.buoy_radius = -1; */
+    /* ret.buoy_area = -1; */
+
     /* Mat src_colored = color(this->src); */
     /* r = outputWireAngle(src_colored); */
     /* ret.wire_angle = r[0]; */
@@ -55,49 +62,52 @@ void Vision::getImage() {
     }
     if(!src.empty()) {
         std::stringstream dest;
-        dest << index_ << ".jpg";
-        /* imwrite(dest.str(), src); */
-        resize(src, src, Size(480, 640));
+#if WRITE_IMAGES
+        dest << IMAGE_DEST << index_ << ".jpg";
+        imwrite(dest.str(), src);
+#endif
+        resize(src, src, Size(640, 480));
         index_++;
-        imshow( "Display window", src );
+        /* imshow("Raw Image", src); */
         waitKey(25);
     }
 }
 vector<double> Vision::detect_buoy(Mat src){
-    /* cout << "detect_buoy" << endl; */
-    if(src.empty()) {
-        vector<double> res;
-        res.push_back(-1);
-        res.push_back(-1);
-        res.push_back(-1);
-        return res;
-    }
     Mat src_hsv, src_colored;
-    /* cout << "Coloring image" << endl; */
+	medianBlur(src, src, 9);
+
+    /* Mat src_ycrcb, result_ycrcb; */
+    /* cvtColor(src, src_ycrcb, CV_BGR2YCrCb); */
+    /* vector<Mat> channels; */
+    /* split(src_ycrcb, channels); */
+    /* equalizeHist(channels[0], channels[0]); */
+    /* merge(channels,result_ycrcb); */
+    /* cvtColor(result_ycrcb,src,CV_YCrCb2BGR); */
+
     cvtColor(src, src_hsv, COLOR_BGR2HSV);
+    /* imshow("src", src); */
     int lower_bound1, lower_bound2;
     int upper_bound1, upper_bound2;
     string colorToDetect;
     Mat lower_bound_image, upper_bound_image;
-    /* // Yellow buoy */
-    lower_bound1 = 22;
-    lower_bound2 = 38;
-    upper_bound1 = 22;
-    upper_bound2 = 38;
-
-    // Red buoy
-    /* lower_bound1 = 0; */
-    /* lower_bound2 = 132; */
-    /* upper_bound1 = 0; */
-    /* upper_bound2 = 132; */
+    /* lower_bound1 = 1; */
+    /* lower_bound2 = 40; */
+    /* upper_bound1 = 1; */
+    /* upper_bound2 = 40; */
 
     //filtering for color
-    inRange(src_hsv, Scalar(lower_bound1,100,100), Scalar(lower_bound2,255,255), lower_bound_image);
-    inRange(src_hsv, Scalar(upper_bound1,100,100), Scalar(upper_bound2,255,255), upper_bound_image);
+    // yellow
+    inRange(src_hsv, Scalar(10,100,100), Scalar(50,255,255), lower_bound_image);
+    inRange(src_hsv, Scalar(10,100,100), Scalar(50,255,255), upper_bound_image);
+
+    // red
+    /* inRange(src_hsv, Scalar(0,0,179), Scalar(255,179,255), lower_bound_image); */
+    /* inRange(src_hsv, Scalar(0,0,179), Scalar(255,179,255), upper_bound_image); */
 
     addWeighted(lower_bound_image, 1.0, upper_bound_image, 1.0, 0.0, src_colored);
 
-    imshow("colored", src_colored);
+	/* imshow("thresholded", src_colored); */
+
 
     //src colored is our filtered img
     RNG rng(12345);
@@ -115,53 +125,61 @@ vector<double> Vision::detect_buoy(Mat src){
     vector<float> radius(contours.size());
 
     for(size_t i = 0; i < contours.size(); i++){
-        approxPolyDP(Mat(contours[i]), contours_poly[i], 3, true);
-        boundRect[i] = boundingRect(Mat(contours_poly[i]));
-        minEnclosingCircle((Mat)contours_poly[i], center[i], radius[i]);
+    	approxPolyDP(Mat(contours[i]), contours_poly[i], 3, true);
+		boundRect[i] = boundingRect(Mat(contours_poly[i]));
+		minEnclosingCircle((Mat)contours_poly[i], center[i], radius[i]);
     }
 
     //checking the radii, making sure greater than 100 for these purposes. -- can change
     vector<Point2f> candidates;
     double largest_radius = 0;
+    double largest_radius2 = 0;
     double largest_idx = -1;
-    for(size_t i = 0; i < radius.size(); i++){
-        if(radius[i] > largest_radius && radius[i] > 20){
-            largest_radius = radius[i];
-            /* cout << radius[i] << endl; */
-            largest_idx = i;
+    double largest_idx2 = -1;
+    for(size_t i = 0; i < contours.size(); i++){
+        if(contourArea(contours[i]) > largest_radius && contourArea(contours[i]) > 0){
+			largest_radius2 = largest_radius;
+	    	largest_idx2 = largest_idx;
+			largest_radius = contourArea(contours[i]);
+	    	largest_idx = i;
+		}
+    }
+    if(largest_idx2 != -1) {
+        if(contours[largest_idx2][0].y < contours[largest_idx][0].y) {
+            largest_idx = largest_idx2;
         }
-        //	cout << "center: " << center[i] << "       " << "radius: " << radius[i] << endl;
     }
 
-    //push the largest on
-    vector<double> rvec;
-    if(largest_idx != -1){
-        cout << " FOUND IT ON FRAME" << endl;
+	//push the largest on
+	vector<double> rvec;
+
+
+	if(largest_idx != -1){
         candidates.push_back(center[largest_idx]);
-        outputBuoyAngle(src, candidates, rvec);
-    }
-    else{
-        /* cout << "Nothing detected, Angle to travel : -1" << endl; */
-        rvec.push_back(-1);
-        rvec.push_back(-1);
-        rvec.push_back(-1);
-        return rvec;
-    }
+	    outputBuoyAngle(src, candidates, rvec);
+	}
+	else{
+	    /* cout << "Nothing detected, Angle to travel : -1" << endl; */
+		rvec.push_back(-1);
+		rvec.push_back(-1);
+		rvec.push_back(-1);
+		return rvec;
+	}
+	/* cout << "BUOY CONTOUR AREA: " <<  contourArea(contours[largest_idx]) << endl;; */
 
-    /* cout << __LINE__ << endl; */
     Mat drawing = Mat::zeros(src_colored.size(), CV_8UC3);
-    Scalar color = Scalar(rng.uniform(0,255), rng.uniform(0,255), rng.uniform(0,255));
-    drawContours(drawing, contours_poly, largest_idx, color, 1, 8, vector<Vec4i>(), 0, Point());
+   	Scalar color = Scalar(rng.uniform(0,255), rng.uniform(0,255), rng.uniform(0,255));
+	drawContours(drawing, contours_poly, largest_idx, color, 1, 8, vector<Vec4i>(), 0, Point());
     rectangle(drawing, boundRect[largest_idx].tl(), boundRect[largest_idx].br(), color, 2, 8, 0);
 
-    imshow("buoy contour", drawing);
+	/* imshow("buoy contour", drawing); */
 
 
 
-    //return the vector
-    /* cout << boundRect[largest_idx].area()<< endl; */
-    rvec.push_back(boundRect[largest_idx].area());
-    return rvec;
+	//return the vector
+        cout << boundRect[largest_idx].area()<< endl;
+	rvec.push_back(boundRect[largest_idx].area());
+	return rvec;
 }
 
 void Vision::outputBuoyAngle(Mat &src, vector<Point2f> &candidates, vector<double> &rvec){
@@ -380,7 +398,7 @@ vector<double> Vision::outputWireAngle(Mat &src_colored){
     }
 
     // Show in a window
-    imshow( "Contours", drawing );
+    /* imshow( "Contours", drawing ); */
     waitKey(25);
 
 

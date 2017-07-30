@@ -22,10 +22,13 @@
 
 #include "vision.h"
 
+#define CONSTRAIN(num, min, max) (num < min ? min : (num > max ? max : num))
 #define FILTER_LEN 3
-const float speed = 0.10;
-const float kP_yaw = 0.00003;
-const float kP_height = 0.0000001;
+const float speed = 0.05;
+const float kP_yaw = 0.0005;
+const float kP_height = -0.0010;
+const float down_max = -0.18;
+const float yaw_max = 0.10;
 
 class MissionController {
     public:
@@ -97,8 +100,8 @@ class MissionController {
 
 /* static const MissionController::State mission[] = { MissionController::VISION }; */
 /* static const float durations[] = { -1 }; */
-static const MissionController::State mission[] = { MissionController::VISION };
-static const float durations[] = { -1 };
+static const MissionController::State mission[] = { MissionController::FORWARD, MissionController::VISION };
+static const float durations[] = { 40.0, -1 };
 const MissionController::State *MissionController::mission_ = mission;
 const float *MissionController::durations_ = durations;
 
@@ -149,19 +152,25 @@ void MissionController::disarm() {
 }
 
 void MissionController::SetAngular(float roll, float pitch, float yaw) {
+    if(estop_) {
+        return;
+    }
     geometry_msgs::Vector3 msg;
     msg.x = roll;
     msg.y = pitch;
-    msg.z = yaw;
+    msg.z = CONSTRAIN(yaw, -yaw_max, yaw_max);
     angular_pub_.publish(msg);
 }
 
 
 void MissionController::SetLinear(float xdot, float ydot, float zdot) {
+    if(estop_) {
+        return;
+    }
     geometry_msgs::Vector3 msg;
     msg.x = xdot;
     msg.y = ydot;
-    msg.z = zdot;
+    msg.z = (zdot < down_max ? down_max : zdot);
     linear_pub_.publish(msg);
 }
 
@@ -293,14 +302,16 @@ int main(int argc, char** argv) {
   ros::init(argc, argv, "mission");
 
   ros::NodeHandle nh;
-  ros::Rate r(10);
+  ros::Rate r(60);
 
   MissionController control;
   int i = 0;
   while(ros::ok()) {
       ros::spinOnce();
       control.vision_.getImage();
-      control.Iterate();
+      if (i % 3 == 0) {
+          control.Iterate();
+      }
       r.sleep();
       i++;
   }
